@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Image Comparator</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #f8fafc;
+    --surface:   #ffffff;
+    --border:    #e2e8f0;
+    --border2:   #cbd5e1;
+    --accent:    #3b82f6;
+    --accent-lt: #eff6ff;
+    --text:      #1e293b;
+    --muted:     #94a3b8;
+    --H:         13px;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 28px 20px 36px;
+    gap: 20px;
+  }
+
+  header {
+    display: flex; align-items: center; gap: 16px;
+    width: 100%; max-width: 940px; flex-wrap: wrap;
+  }
+
+  h1 { font-size: 1rem; font-weight: 500; color: var(--text); letter-spacing: -0.01em; }
+
+  .uploads { display: flex; gap: 10px; }
+
+  .upload-zone {
+    position: relative; width: 130px; height: 36px;
+    border: 1px solid var(--border2); border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; background: var(--surface);
+    transition: border-color 0.15s, background 0.15s; overflow: hidden;
+  }
+  .upload-zone:hover { border-color: var(--accent); background: var(--accent-lt); }
+  .upload-zone.filled, .upload-zone.filled-esr { border-color: var(--accent); background: var(--accent-lt); }
+  .upload-zone input[type="file"] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+  .upload-label { font-size: 0.73rem; font-weight: 500; color: var(--muted); pointer-events: none; display: flex; align-items: center; gap: 5px; }
+  .upload-zone.filled .upload-label, .upload-zone.filled-esr .upload-label { color: var(--accent); }
+  .upload-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--border2); flex-shrink: 0; }
+  .upload-zone.filled .upload-dot, .upload-zone.filled-esr .upload-dot { background: var(--accent); }
+
+  /* Toggle buttons */
+  .toggles { display: flex; gap: 8px; margin-left: auto; }
+
+  .toggle-btn {
+    font-family: 'Inter', sans-serif;
+    font-size: 0.7rem; font-weight: 500;
+    padding: 5px 11px; border-radius: 5px;
+    border: 1px solid var(--border2);
+    background: var(--surface); color: var(--text);
+    cursor: pointer; transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .toggle-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .toggle-btn.off {
+    background: var(--bg); color: var(--muted);
+    border-color: var(--border); text-decoration: line-through;
+  }
+
+  #hint { font-size: 0.8rem; color: var(--muted); text-align: center; }
+
+  #stage-wrap { display: none; flex-direction: column; align-items: center; gap: 10px; width: 100%; }
+  #stage-wrap.visible { display: flex; }
+
+  /* ── Viewport ── */
+  #viewport {
+    position: relative; overflow: hidden;
+    width: min(940px, 92vw); height: 74vh;
+    border-radius: 8px; border: 1px solid var(--border);
+    background: #e2e8f0;
+    touch-action: none; cursor: grab;
+    user-select: none;
+  }
+  #viewport.panning { cursor: grabbing; }
+
+  /* ── Stage: image canvas, pans/zooms ── */
+  #stage {
+    position: absolute; top: 0; left: 0;
+    transform-origin: 0 0; line-height: 0;
+    pointer-events: none;
+  }
+  #base-img { display: block; }
+
+  #enhanced-layer {
+    position: absolute; top: 0; left: 0;
+    width: 100%; height: 100%; pointer-events: none;
+  }
+  #enhanced-layer img { width: 100%; height: 100%; display: block; }
+
+  /*
+    ── UI overlay ──
+    Fixed in viewport-space. Handles live here.
+    Clip box is FIXED on screen — image moves behind it.
+  */
+  #ui-overlay {
+    position: absolute; inset: 0;
+    pointer-events: none; z-index: 10;
+  }
+
+  #clip-border {
+    position: absolute;
+    border: 1.5px solid var(--accent);
+    pointer-events: none;
+  }
+
+  .clip-label {
+    position: absolute; top: 6px; left: 6px;
+    font-size: 0.6rem; font-weight: 500; letter-spacing: 0.04em;
+    background: var(--accent); color: #fff;
+    padding: 2px 6px; border-radius: 3px;
+    pointer-events: none; white-space: nowrap;
+  }
+
+  /* Drag zone inside clip box — moves the BOX (pans image inversely) */
+  #box-drag {
+    position: absolute; pointer-events: all; cursor: grab; z-index: 11;
+  }
+  #box-drag.dragging { cursor: grabbing; }
+
+  #orig-label {
+    position: absolute; bottom: 10px; left: 10px;
+    font-size: 0.6rem; font-weight: 500; letter-spacing: 0.04em;
+    background: rgba(255,255,255,0.85); color: var(--text);
+    padding: 2px 7px; border-radius: 3px;
+    pointer-events: none; backdrop-filter: blur(4px);
+  }
+
+  .handle {
+    position: absolute;
+    width: var(--H); height: var(--H);
+    background: #fff; border: 1.5px solid var(--accent);
+    border-radius: 2px; pointer-events: all;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.15); z-index: 20;
+  }
+  .handle[data-pos="nw"] { cursor: nw-resize; }
+  .handle[data-pos="n"]  { cursor: n-resize; }
+  .handle[data-pos="ne"] { cursor: ne-resize; }
+  .handle[data-pos="e"]  { cursor: e-resize; }
+  .handle[data-pos="se"] { cursor: se-resize; }
+  .handle[data-pos="s"]  { cursor: s-resize; }
+  .handle[data-pos="sw"] { cursor: sw-resize; }
+  .handle[data-pos="w"]  { cursor: w-resize; }
+
+  .toolbar {
+    display: flex; gap: 16px; align-items: center;
+    font-size: 0.72rem; color: var(--muted);
+    width: min(940px, 92vw); justify-content: flex-end;
+  }
+  .zoom-badge {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 4px; padding: 3px 8px;
+    font-size: 0.7rem; color: var(--text); min-width: 52px; text-align: center;
+  }
+  .reset-btn {
+    background: var(--surface); border: 1px solid var(--border2);
+    color: var(--muted); font-family: 'Inter', sans-serif;
+    font-size: 0.72rem; padding: 4px 12px; border-radius: 5px;
+    cursor: pointer; transition: border-color 0.15s, color 0.15s;
+  }
+  .reset-btn:hover { border-color: var(--accent); color: var(--accent); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Image Comparator</h1>
+  <div class="uploads">
+    <div class="upload-zone" id="zone-orig">
+      <input type="file" accept="image/*" id="input-orig">
+      <span class="upload-label"><span class="upload-dot"></span>Original</span>
+    </div>
+    <div class="upload-zone" id="zone-esr">
+      <input type="file" accept="image/*" id="input-esr">
+      <span class="upload-label"><span class="upload-dot"></span>Enhanced</span>
+    </div>
+  </div>
+  <div class="toggles">
+    <button class="toggle-btn" id="btn-tool">Tool</button>
+    <button class="toggle-btn" id="btn-orig">Original</button>
+    <button class="toggle-btn" id="btn-enh">Enhanced</button>
+  </div>
+</header>
+
+<p id="hint">Upload both images to begin comparing.</p>
+
+<div id="stage-wrap">
+  <div id="viewport">
+    <div id="stage">
+      <img id="base-img" src="" alt="">
+      <div id="enhanced-layer">
+        <img id="enhanced-img" src="" alt="">
+      </div>
+    </div>
+
+    <div id="ui-overlay">
+      <!-- clip box (border only, no pointer events) -->
+      <div id="clip-border">
+        <span class="clip-label">Enhanced</span>
+      </div>
+      <!-- drag zone inside box: moves the box -->
+      <div id="box-drag"></div>
+      <!-- handles -->
+      <div class="handle" data-pos="nw"></div>
+      <div class="handle" data-pos="n"></div>
+      <div class="handle" data-pos="ne"></div>
+      <div class="handle" data-pos="e"></div>
+      <div class="handle" data-pos="se"></div>
+      <div class="handle" data-pos="s"></div>
+      <div class="handle" data-pos="sw"></div>
+      <div class="handle" data-pos="w"></div>
+      <div id="orig-label">Original</div>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <span id="coords"></span>
+    <span class="zoom-badge" id="zoom-val">100%</span>
+    <button class="reset-btn" id="reset-btn">Reset view</button>
+  </div>
+</div>
+
+<script>
+  const inputOrig     = document.getElementById('input-orig');
+  const inputEsr      = document.getElementById('input-esr');
+  const zoneOrig      = document.getElementById('zone-orig');
+  const zoneEsr       = document.getElementById('zone-esr');
+  const baseImg       = document.getElementById('base-img');
+  const enhancedImg   = document.getElementById('enhanced-img');
+  const enhancedLayer = document.getElementById('enhanced-layer');
+  const viewport      = document.getElementById('viewport');
+  const stage         = document.getElementById('stage');
+  const clipBorder    = document.getElementById('clip-border');
+  const boxDragEl     = document.getElementById('box-drag');
+  const stageWrap     = document.getElementById('stage-wrap');
+  const coordsEl      = document.getElementById('coords');
+  const zoomValEl     = document.getElementById('zoom-val');
+  const resetBtn      = document.getElementById('reset-btn');
+  const hintEl        = document.getElementById('hint');
+  const btnTool       = document.getElementById('btn-tool');
+  const btnOrig       = document.getElementById('btn-orig');
+  const btnEnh        = document.getElementById('btn-enh');
+
+  let origLoaded = false, esrLoaded = false;
+  let imgW = 0, imgH = 0;
+  let view = { tx: 0, ty: 0, scale: 1 };
+
+  // Visibility state
+  let showTool = true, showOrig = true, showEnh = true;
+
+  /*
+    clip is stored in VIEWPORT-SPACE (screen px from viewport top-left).
+    This is the key change: the box is fixed on screen.
+    When the image pans, we recompute which part of the image is under the box.
+  */
+  let clipVP = { x: 0, y: 0, w: 0, h: 0 }; // viewport-space
+
+  // ── Convert between viewport-space and stage-space ──────────
+  function vpToStage(vx, vy) {
+    return { x: (vx - view.tx) / view.scale, y: (vy - view.ty) / view.scale };
+  }
+  function vpDeltaToStage(dx, dy) {
+    return { dx: dx / view.scale, dy: dy / view.scale };
+  }
+
+  // ── Apply view transform to stage ───────────────────────────
+  function applyView() {
+    stage.style.transform = `translate(${view.tx}px,${view.ty}px) scale(${view.scale})`;
+    zoomValEl.textContent = Math.round(view.scale * 100) + '%';
+    applyClipPath();
+    positionUI();
+  }
+
+  // ── Compute clip-path from clipVP (viewport-space) onto enhanced-layer ──
+  // enhanced-layer is inside #stage which is transformed, so we convert
+  // the viewport-space clip rect into stage-space percentages.
+  function applyClipPath() {
+    if (!imgW || !showTool || !showEnh) {
+      // Tool hidden OR enhanced hidden: show full enhanced (or nothing)
+      if (!showEnh) {
+        enhancedLayer.style.clipPath = 'inset(100%)'; // hide completely
+      } else {
+        enhancedLayer.style.clipPath = 'none'; // show fully (tool off)
+      }
+      return;
+    }
+    if (!showOrig) {
+      // Original hidden: show full enhanced
+      enhancedLayer.style.clipPath = 'none';
+      return;
+    }
+
+    // Normal: clip enhanced to the clipVP rect
+    // Convert clipVP corners to stage-space
+    const tl = vpToStage(clipVP.x, clipVP.y);
+    const br = vpToStage(clipVP.x + clipVP.w, clipVP.y + clipVP.h);
+
+    // Clamp to image bounds
+    const l = Math.max(0, tl.x), t = Math.max(0, tl.y);
+    const r = Math.min(imgW, br.x), b = Math.min(imgH, br.y);
+
+    const pL = l / imgW * 100, pT = t / imgH * 100;
+    const pR = (imgW - r) / imgW * 100, pB = (imgH - b) / imgH * 100;
+    enhancedLayer.style.clipPath = `inset(${pT}% ${pR}% ${pB}% ${pL}%)`;
+
+    // Coords: size in stage-space px
+    const sw = (r - l), sh = (b - t);
+    coordsEl.textContent = `${Math.round(sw)} × ${Math.round(sh)} px`;
+  }
+
+  // ── Position UI overlay elements (always in viewport-space) ─
+  const SZ = 13;
+  function positionUI() {
+    const { x, y, w, h } = clipVP;
+
+    clipBorder.style.left   = x + 'px';
+    clipBorder.style.top    = y + 'px';
+    clipBorder.style.width  = w + 'px';
+    clipBorder.style.height = h + 'px';
+
+    const inset = SZ;
+    boxDragEl.style.left   = (x + inset) + 'px';
+    boxDragEl.style.top    = (y + inset) + 'px';
+    boxDragEl.style.width  = Math.max(0, w - inset * 2) + 'px';
+    boxDragEl.style.height = Math.max(0, h - inset * 2) + 'px';
+
+    const mx = x + w / 2, my = y + h / 2, hx = SZ / 2;
+    const positions = {
+      nw:[x,my+h/2-h/2], // recompute cleanly below
+    };
+    const pts = {
+      nw:[x,y], n:[mx,y], ne:[x+w,y],
+      e:[x+w,my], se:[x+w,y+h], s:[mx,y+h],
+      sw:[x,y+h], w:[x,my],
+    };
+    document.querySelectorAll('.handle').forEach(h => {
+      const [hx2, hy2] = pts[h.dataset.pos];
+      h.style.left = (hx2 - hx) + 'px';
+      h.style.top  = (hy2 - hx) + 'px';
+    });
+  }
+
+  // ── Visibility logic ─────────────────────────────────────────
+  function applyVisibility() {
+    // Original image
+    baseImg.style.visibility = showOrig ? 'visible' : 'hidden';
+
+    // Enhanced layer
+    // showEnh=false → hidden entirely; handled in applyClipPath
+    // Tool visibility
+    const toolVisible = showTool && showEnh && showOrig;
+    clipBorder.style.display = toolVisible ? '' : 'none';
+    boxDragEl.style.display  = toolVisible ? '' : 'none';
+    document.querySelectorAll('.handle').forEach(h => h.style.display = toolVisible ? '' : 'none');
+
+    applyClipPath();
+
+    // Toggle button states
+    btnTool.classList.toggle('off', !showTool);
+    btnOrig.classList.toggle('off', !showOrig);
+    btnEnh.classList.toggle('off',  !showEnh);
+  }
+
+  btnTool.addEventListener('click', () => { showTool = !showTool; applyVisibility(); });
+  btnOrig.addEventListener('click', () => { showOrig = !showOrig; applyVisibility(); });
+  btnEnh.addEventListener('click',  () => { showEnh  = !showEnh;  applyVisibility(); });
+
+  // ── Reset / fit ──────────────────────────────────────────────
+  function fitAndCenter() {
+    const vw = viewport.clientWidth, vh = viewport.clientHeight;
+    const nat = baseImg.naturalWidth / baseImg.naturalHeight;
+    if (nat > vw / vh) { imgW = vw; imgH = vw / nat; }
+    else               { imgH = vh; imgW = vh * nat; }
+
+    baseImg.style.width  = imgW + 'px';
+    baseImg.style.height = imgH + 'px';
+    stage.style.width    = imgW + 'px';
+    stage.style.height   = imgH + 'px';
+
+    view = { tx: (vw - imgW) / 2, ty: (vh - imgH) / 2, scale: 1 };
+  }
+
+  function resetAll() {
+    fitAndCenter();
+    const vw = viewport.clientWidth, vh = viewport.clientHeight;
+    // Default clip box: center 60% of viewport
+    const bw = vw * 0.55, bh = vh * 0.55;
+    clipVP = { x: (vw - bw) / 2, y: (vh - bh) / 2, w: bw, h: bh };
+    applyView();
+    applyVisibility();
+  }
+
+  resetBtn.addEventListener('click', resetAll);
+
+  // ── File loading ─────────────────────────────────────────────
+  function loadFile(input, zone, cls, onLoad) {
+    input.addEventListener('change', e => {
+      const f = e.target.files[0]; if (!f) return;
+      onLoad(URL.createObjectURL(f));
+      zone.classList.add(cls);
+    });
+  }
+  loadFile(inputOrig, zoneOrig, 'filled',     url => { baseImg.src    = url; origLoaded = true; tryShow(); });
+  loadFile(inputEsr,  zoneEsr,  'filled-esr', url => { enhancedImg.src = url; esrLoaded  = true; tryShow(); });
+
+  function tryShow() {
+    if (!origLoaded || !esrLoaded) return;
+    const waitImg = img => img.complete && img.naturalWidth
+      ? Promise.resolve()
+      : new Promise(r => { img.onload = r; });
+    Promise.all([waitImg(baseImg), waitImg(enhancedImg)]).then(() => {
+      stageWrap.classList.add('visible');
+      hintEl.style.display = 'none';
+      requestAnimationFrame(() => requestAnimationFrame(resetAll));
+    });
+  }
+
+  // ── Scroll to zoom (cursor-anchored) ─────────────────────────
+  viewport.addEventListener('wheel', e => {
+    e.preventDefault();
+    const factor   = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+    const newScale = Math.max(0.15, Math.min(20, view.scale * factor));
+    const vr = viewport.getBoundingClientRect();
+    const mx = e.clientX - vr.left, my = e.clientY - vr.top;
+    const sx = (mx - view.tx) / view.scale, sy = (my - view.ty) / view.scale;
+    view.tx = mx - sx * newScale;
+    view.ty = my - sy * newScale;
+    view.scale = newScale;
+    applyView(); // clip-path recalculates from fixed clipVP
+  }, { passive: false });
+
+  // ── Pan image (drag anywhere on viewport except box/handles) ─
+  let vpPan = null;
+  viewport.addEventListener('pointerdown', e => {
+    if (e.target.classList.contains('handle')) return;
+    if (e.target === boxDragEl) return;
+    e.preventDefault();
+    viewport.setPointerCapture(e.pointerId);
+    viewport.classList.add('panning');
+    vpPan = { sx: e.clientX, sy: e.clientY, tx: view.tx, ty: view.ty };
+  });
+  document.addEventListener('pointermove', e => {
+    if (!vpPan) return;
+    view.tx = vpPan.tx + (e.clientX - vpPan.sx);
+    view.ty = vpPan.ty + (e.clientY - vpPan.sy);
+    applyView();
+  });
+  document.addEventListener('pointerup', () => {
+    vpPan = null; viewport.classList.remove('panning');
+  });
+
+  // ── Move clip box (drag inside box → moves box, image stays) ─
+  let boxPan = null;
+  boxDragEl.addEventListener('pointerdown', e => {
+    e.preventDefault(); e.stopPropagation();
+    boxDragEl.setPointerCapture(e.pointerId);
+    boxDragEl.classList.add('dragging');
+    boxPan = { sx: e.clientX, sy: e.clientY, cx: clipVP.x, cy: clipVP.y };
+  });
+  boxDragEl.addEventListener('pointermove', e => {
+    if (!boxPan) return;
+    const vw = viewport.clientWidth, vh = viewport.clientHeight;
+    let nx = boxPan.cx + (e.clientX - boxPan.sx);
+    let ny = boxPan.cy + (e.clientY - boxPan.sy);
+    nx = Math.max(0, Math.min(nx, vw - clipVP.w));
+    ny = Math.max(0, Math.min(ny, vh - clipVP.h));
+    clipVP.x = nx; clipVP.y = ny;
+    applyClipPath();
+    positionUI();
+  });
+  boxDragEl.addEventListener('pointerup', () => {
+    boxPan = null; boxDragEl.classList.remove('dragging');
+  });
+
+  // ── Resize handles (resize in viewport-space) ────────────────
+  const MIN_VP = 40;
+  let rDrag = null;
+
+  document.querySelectorAll('.handle').forEach(handle => {
+    handle.addEventListener('pointerdown', e => {
+      e.preventDefault(); e.stopPropagation();
+      handle.setPointerCapture(e.pointerId);
+      rDrag = { pos: handle.dataset.pos, sx: e.clientX, sy: e.clientY, sc: { ...clipVP } };
+    });
+    handle.addEventListener('pointermove', e => {
+      if (!rDrag || rDrag.pos !== handle.dataset.pos) return;
+      const dx = e.clientX - rDrag.sx, dy = e.clientY - rDrag.sy;
+      const p = rDrag.pos, sc = rDrag.sc;
+      const vw = viewport.clientWidth, vh = viewport.clientHeight;
+      let { x, y, w, h } = sc;
+
+      if (p.includes('e')) w  = Math.max(MIN_VP, sc.w + dx);
+      if (p.includes('s')) h  = Math.max(MIN_VP, sc.h + dy);
+      if (p.includes('w')) { const nw = Math.max(MIN_VP, sc.w - dx); x = sc.x + sc.w - nw; w = nw; }
+      if (p.includes('n')) { const nh = Math.max(MIN_VP, sc.h - dy); y = sc.y + sc.h - nh; h = nh; }
+
+      x = Math.max(0, Math.min(x, vw - MIN_VP));
+      y = Math.max(0, Math.min(y, vh - MIN_VP));
+      w = Math.min(w, vw - x);
+      h = Math.min(h, vh - y);
+
+      clipVP = { x, y, w, h };
+      applyClipPath();
+      positionUI();
+    });
+    handle.addEventListener('pointerup', () => { rDrag = null; });
+  });
+</script>
+</body>
+</html>
